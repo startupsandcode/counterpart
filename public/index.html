@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Counterpart Kit</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <main>
+    <header><span class="eyebrow">LOCAL DEMO · FICTIONAL PERSONA</span><h1>Ask Mira's counterpart</h1><p id="disclosure">Mira Vale is fictional. This is an AI counterpart.</p></header>
+    <section class="status"><strong>Local model</strong><span id="model-status">Checking…</span><label for="model">Model</label><select id="model"></select></section>
+    <section class="chat" aria-live="polite" id="messages"><p class="intro">Ask a general question or ask about Mira's sample roasting notes.</p></section>
+    <form id="ask"><label for="question">Your question</label><textarea id="question" maxlength="5000" required placeholder="What should I track during a first roast?"></textarea><label class="check"><input type="checkbox" id="search"> Search the web for current sources</label><p class="disclosure">When checked, only this question is sent to DuckDuckGo. Persona instructions and chat history stay local. Search excerpts are leads; open linked pages to verify them.</p><button type="submit">Ask</button></form>
+    <section class="sources"><h2>Sources</h2><div id="sources"><p>No sources yet.</p></div></section>
+    <footer>Runs on this computer through a loopback model server. Conversations are not saved by this app. Do not enter secrets or private data.</footer>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

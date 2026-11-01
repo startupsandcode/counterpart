@@ -1,0 +1,23 @@
+:root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; background: #f5f2ea; color: #1d2925; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 780px; margin: auto; padding: 3rem 1.25rem; }
+h1 { font-size: clamp(2rem, 6vw, 3.5rem); line-height: 1.1; margin: .35rem 0; }
+h2 { font-size: 1rem; }
+.eyebrow { font-size: .75rem; letter-spacing: .13em; font-weight: 700; color: #4b6c5e; }
+header p, footer, .disclosure { color: #52635c; }
+.status, .chat, form, .sources { background: #fff; border: 1px solid #d9e0d8; border-radius: 12px; padding: 1.1rem 1.25rem; margin: 1rem 0; }
+.status { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.status strong { margin-right: auto; }
+.chat { min-height: 190px; max-height: 400px; overflow: auto; }
+.chat p { padding: .7rem 1rem; border-radius: 10px; max-width: 88%; }
+.chat .user { background: #dceee5; margin-left: auto; }
+.chat .assistant, .chat .intro { background: #f1f3ef; }
+label { display: block; font-weight: 600; }
+textarea { display: block; width: 100%; min-height: 90px; resize: vertical; font: inherit; padding: .75rem; margin: .5rem 0; border: 1px solid #9daea5; border-radius: 8px; }
+select, button { font: inherit; padding: .45rem .7rem; }
+.check { font-weight: 400; }
+.disclosure { font-size: .85rem; }
+button { color: #fff; background: #1b5b47; border: 0; border-radius: 8px; padding: .65rem 1.3rem; cursor: pointer; }
+a { color: #145943; }
+footer { font-size: .85rem; margin-top: 1.5rem; }
