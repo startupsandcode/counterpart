@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createChatService } from '../src/service.mjs';
-import { createWebSearch, parseResults } from '../src/search.mjs';
+import { createWebSearch, createOfficialPageReader, parseResults } from '../src/search.mjs';
 import { createLocalProvider } from '../src/provider.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -60,6 +60,61 @@ test('web answer rejects a number found only in a result title', async () => {
   const result = await service.answer({ personaId: 'mira', question: 'Latest macOS requirements?', searchWeb: true });
   assert.equal(result.contextual, false);
   assert.deepEqual(result.sources, []);
+});
+
+test('an official-docs question excludes third-party advice from model evidence', async () => {
+  let prompt = '';
+  const provider = { model: 'sample', complete: async (value) => {
+    prompt = value;
+    return { text: JSON.stringify({ answer: 'Ollama requires macOS 14 or newer.', sources: ['W1'] }) };
+  } };
+  const webSearch = async () => [
+    { id: 'W1', title: 'macOS - Ollama', snippet: 'MacOS Sonoma (v14) or newer', url: 'https://docs.ollama.com/macos' },
+    { id: 'W2', title: 'Setup guide', snippet: 'Check that Ollama version shows 0.40 or later.', url: 'https://example.org/setup' },
+  ];
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider, webSearch, officialPage: async () => 'System Requirements: MacOS Sonoma (v14) or newer' });
+  const result = await service.answer({ personaId: 'mira', question: 'According to official Ollama documentation, what is the minimum macOS version?', searchWeb: true });
+  assert.doesNotMatch(prompt, /Check that Ollama version/);
+  assert.match(prompt, /System Requirements: MacOS Sonoma/);
+  assert.equal(result.text, 'Ollama requires macOS 14 or newer.');
+  assert.deepEqual(result.sources.map((source) => source.url), ['https://docs.ollama.com/macos']);
+});
+
+test('an explicit official-docs question without a verified page does not use third-party results', async () => {
+  let called = false;
+  const provider = { model: 'sample', complete: async () => { called = true; return { text: '{}' }; } };
+  const webSearch = async () => [{ id: 'W1', title: 'Unofficial guide', snippet: 'A setup suggestion.', url: 'https://example.org/guide' }];
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider, webSearch });
+  const result = await service.answer({ personaId: 'mira', question: 'According to official Ollama documentation, what macOS is needed?', searchWeb: true });
+  assert.equal(called, false);
+  assert.match(result.text, /could not verify an official source/i);
+});
+
+test('official page reader extracts the requirement section from an allowlisted HTTPS page', async () => {
+  const html = '<h2 id="system-requirements"><span>System Requirements</span></h2><ul><li>MacOS Sonoma (v14) or newer</li><li>Apple M series or x86</li></ul><h2>Other</h2>';
+  const reader = createOfficialPageReader({ fetchImpl: async (_url, options) => {
+    assert.equal(options.redirect, 'error');
+    return { ok: true, headers: { get: () => 'text/html' }, text: async () => html };
+  } });
+  assert.equal(await reader('https://docs.ollama.com/macos', { domains: ['docs.ollama.com'], sectionId: 'system-requirements' }), 'System Requirements: MacOS Sonoma (v14) or newer Apple M series or x86');
+  await assert.rejects(reader('https://example.org/macos', { domains: ['docs.ollama.com'], sectionId: 'system-requirements' }), /approved official/);
+});
+
+test('a setup recommendation cannot become a version requirement even when its number matches', async () => {
+  const provider = { model: 'sample', complete: async () => ({ text: JSON.stringify({ answer: 'Ollama requires version 0.40 or later.', sources: ['W1'] }) }) };
+  const webSearch = async () => [{ id: 'W1', title: 'Setup advice', snippet: 'Check that ollama --version shows 0.40 or later.', url: 'https://example.org/setup' }];
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider, webSearch, officialDocs: {} });
+  const result = await service.answer({ personaId: 'mira', question: 'What version should I check before setup?', searchWeb: true });
+  assert.equal(result.contextual, false);
+  assert.deepEqual(result.sources, []);
+});
+
+test('general knowledge remains available without web search', async () => {
+  const provider = { model: 'sample', complete: async () => ({ text: JSON.stringify({ answer: 'Keep the first experiment small.', sources: [] }) }) };
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider });
+  const result = await service.answer({ personaId: 'mira', question: 'How should I run a small experiment?' });
+  assert.equal(result.text, 'Keep the first experiment small.');
+  assert.equal(result.contextual, true);
 });
 
 test('fictional persona answer cites only its configured knowledge', async () => {

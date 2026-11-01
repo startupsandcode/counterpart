@@ -1,10 +1,11 @@
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { createWebSearch } from './search.mjs';
+import { createWebSearch, createOfficialPageReader } from './search.mjs';
 
 const MAX_QUESTION = 5000;
 const PRIVATE = /\b(?:private (?:email|message|client|records?|data)|confidential|passwords?|api keys?|bank account|medical records?|secret credentials?)\b|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b|\b(?:sk-|ghp_|github_pat_|xox[baprs]-)[a-z0-9_-]{12,}\b/i;
 const COMMITMENT = /\b(?:I am|I'm) (?:the )?(?:real )?[A-Z][a-z]+\b|\b(?:I|we)(?:'ll| will) (?:call|email|message|send|meet|hire|pay)\b/i;
+const DEFAULT_OFFICIAL_DOCS = { ollama: { domains: ['docs.ollama.com'], sectionId: 'system-requirements' } };
 
 export class ChatError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -18,6 +19,15 @@ function numbers(value) {
 function supportedNumbers(answer, sources) {
   const available = new Set(sources.flatMap((source) => numbers(source.snippet)));
   return numbers(answer).every((item) => available.has(item));
+}
+
+function supportedRequirements(answer, sources) {
+  const claims = answer.split(/(?<=[.!?])\s+/).filter((sentence) => /\b(?:requires?|required|must|needs?|minimum|only compatible)\b/i.test(sentence));
+  return claims.every((claim) => numbers(claim).every((number) => sources.some((source) => {
+    if (!numbers(source.snippet).includes(number)) return false;
+    if (/\b(?:requires?|required|must|needs?|minimum|only compatible)\b/i.test(source.snippet)) return true;
+    return source.verifiedPage === true && /\bSystem Requirements\b/i.test(source.snippet) && /\bor newer\b/i.test(source.snippet);
+  })));
 }
 
 function parseAnswer(raw) {
@@ -50,7 +60,7 @@ async function loadSource(root, source) {
   return { id: source.id, title: source.title, authorship: source.authorship || 'User supplied', snippet: text.slice(0, 3000) };
 }
 
-export function createChatService({ personas, knowledgeRoot, provider, webSearch = createWebSearch() }) {
+export function createChatService({ personas, knowledgeRoot, provider, webSearch = createWebSearch(), officialPage = createOfficialPageReader(), officialDocs = DEFAULT_OFFICIAL_DOCS }) {
   if (!Array.isArray(personas) || !personas.length) throw new ChatError('Configure at least one persona.', 500);
   const byId = new Map(personas.map((persona) => [persona.id, persona]));
   const cache = new Map();
@@ -78,6 +88,17 @@ export function createChatService({ personas, knowledgeRoot, provider, webSearch
         try { web = await webSearch(question.trim(), signal); }
         catch (error) { throw new ChatError(`Web search failed: ${error.message}`, 503); }
         if (!web.length) return { text: 'No usable web results were found.', sources: [], contextual: false };
+        const officialRequest = /\bofficial(?:\s+[a-z0-9-]+){0,3}\s+(?:docs|documentation|site)\b/i.test(question);
+        const product = Object.entries(officialDocs).find(([name]) => new RegExp(`\\b${name}\\b`, 'i').test(question));
+        const policy = product?.[1];
+        const official = policy ? web.filter((source) => {
+          try { return policy.domains.includes(new URL(source.url).hostname.toLowerCase()); } catch { return false; }
+        }).slice(0, 2) : [];
+        if (official.length) {
+          try {
+            web = await Promise.all(official.map(async (source) => ({ ...source, snippet: await officialPage(source.url, policy), authorship: 'Verified official page section', verifiedPage: true })));
+          } catch (error) { throw new ChatError(`Official page verification failed: ${error.message}`, 503); }
+        } else if (officialRequest) return { text: 'I could not verify an official source page for that question.', sources: [], contextual: false };
       }
       const evidence = personal ? selected : web;
       const excerpts = evidence.map((source) => `[${source.id}] ${source.title}\n${source.snippet}`).join('\n\n');
@@ -95,7 +116,7 @@ export function createChatService({ personas, knowledgeRoot, provider, webSearch
       const answer = typeof result?.answer === 'string' ? result.answer.trim().slice(0, 1800) : '';
       const cited = evidence.filter((source) => result?.sources?.includes(source.id));
       const quote = typeof result?.supportQuote === 'string' ? result.supportQuote.trim() : '';
-      const supported = answer && !COMMITMENT.test(answer) && (!evidence.length || (cited.length && supportedNumbers(answer, cited)))
+      const supported = answer && !COMMITMENT.test(answer) && (!evidence.length || (cited.length && supportedNumbers(answer, cited) && supportedRequirements(answer, cited)))
         && (!personal || (quote.length >= 20 && cited.some((source) => source.snippet.includes(quote))));
       if (!supported) return { text: 'I do not have enough source support to answer confidently.', sources: [], contextual: false };
       return { text: answer, sources: cited.map(({ id, title, authorship, url }) => ({ id, title, authorship: authorship || 'Web search result', url })), contextual: true, model: modelId || provider.model, answerMode: personal ? 'persona' : 'general' };

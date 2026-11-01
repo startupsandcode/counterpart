@@ -68,3 +68,36 @@ export function createWebSearch({ fetchImpl = fetch, timeoutMs = 10_000 } = {}) 
     return parseResults(html);
   };
 }
+
+export function createOfficialPageReader({ fetchImpl = fetch, timeoutMs = 10_000 } = {}) {
+  return async (rawUrl, { domains, sectionId }) => {
+    const url = new URL(rawUrl);
+    if (url.protocol !== 'https:' || url.port || url.username || url.password || url.search || url.hash
+      || !domains.includes(url.hostname.toLowerCase())) throw new Error('URL is not an approved official page.');
+    if (!/^[a-z0-9-]+$/.test(sectionId)) throw new Error('Official section is invalid.');
+    const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) throw new Error(`Official page returned HTTP ${response.status}.`);
+    if (!/^text\/html\b/i.test(response.headers?.get?.('content-type') || '')) throw new Error('Official page did not return HTML.');
+    if (Number(response.headers?.get?.('content-length')) > MAX_HTML) throw new Error('Official page was too large.');
+    let html = '';
+    if (response.body?.getReader) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let size = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_HTML) { await reader.cancel(); throw new Error('Official page was too large.'); }
+        html += decoder.decode(value, { stream: true });
+      }
+      html += decoder.decode();
+    } else {
+      html = await response.text();
+      if (html.length > MAX_HTML) throw new Error('Official page was too large.');
+    }
+    const heading = html.match(new RegExp(`<h2[^>]*id=["']${sectionId}["'][^>]*>[\\s\\S]*?<\\/h2>\\s*<ul[^>]*>([\\s\\S]*?)<\\/ul>`, 'i'));
+    if (!heading) throw new Error('Approved official page has no matching requirements section.');
+    return `${sectionId.split('-').map((word) => word[0].toUpperCase() + word.slice(1)).join(' ')}: ${plain(heading[1])}`.slice(0, 3000);
+  };
+}
