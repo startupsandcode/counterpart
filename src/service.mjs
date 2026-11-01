@@ -63,9 +63,14 @@ async function loadSource(root, source) {
   const withoutScripts = raw.replace(/<(script|style|noscript)[^>]*>[\s\S]*?<\/\1>/gi, '');
   const paragraphs = source.excerptPrefix
     ? [...withoutScripts.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)].map((match) => match[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()).filter((text) => text.startsWith(source.excerptPrefix))
-    : [withoutScripts];
-  const text = paragraphs.join(' ').replace(/<[^>]*>/g, ' ').replace(/^#+\s*/gm, '').replace(/\s+/g, ' ').trim();
-  return { id: source.id, title: source.title, authorship: source.authorship || 'User supplied', snippet: text.slice(0, 3000) };
+    : source.path.endsWith('.html')
+      ? [...withoutScripts.matchAll(/<(?:p|li)[^>]*>([\s\S]*?)<\/(?:p|li)>/gi)].map((match) => match[1])
+      : withoutScripts.split(/\n\s*\n/);
+  const chunks = paragraphs.flatMap((part) => {
+    const text = part.replace(/<[^>]*>/g, ' ').replace(/^#+\s*/gm, '').replace(/\s+/g, ' ').trim();
+    return text.match(/.{1,2500}(?:\s|$)/g)?.map((chunk) => chunk.trim()) || [];
+  }).filter(Boolean).slice(0, 50);
+  return { id: source.id, title: source.title, authorship: source.authorship || 'User supplied', chunks };
 }
 
 export function createChatService({ personas, knowledgeRoot, provider, cloudProvider, cloudByokAvailable = false, webSearch = createWebSearch(), officialPage = createOfficialPageReader(), officialDocs = DEFAULT_OFFICIAL_DOCS }) {
@@ -96,7 +101,11 @@ export function createChatService({ personas, knowledgeRoot, provider, cloudProv
       const personal = isPersonaQuestion(question, persona);
       const knowledge = personal ? await sourcesFor(persona) : [];
       const wanted = terms(question);
-      const selected = knowledge.filter((source) => [...wanted].filter((term) => terms(source.snippet).has(term)).length >= 2).slice(0, 2);
+      const selected = knowledge.flatMap((source) => source.chunks.map((snippet) => ({ ...source, snippet })))
+        .map((source) => ({ source, overlap: [...wanted].filter((term) => terms(source.snippet).has(term)).length }))
+        .filter((item) => item.overlap >= 2)
+        .sort((a, b) => b.overlap - a.overlap)
+        .slice(0, 2).map((item) => item.source);
       if (personal && !selected.length) return { text: 'I do not have enough approved material to answer that about this persona.', sources: [], contextual: false };
       let web = [];
       if (searchWeb === true && !personal) {
@@ -142,7 +151,7 @@ export function createChatService({ personas, knowledgeRoot, provider, cloudProv
       const supported = answer && !COMMITMENT.test(answer) && (!evidence.length || (cited.length && supportedNumbers(answer, cited) && supportedRequirements(answer, cited)))
         && (!personal || (quote.length >= 20 && cited.some((source) => source.snippet.includes(quote)) && attributedClaimSupported(answer, quote, persona)));
       if (!supported) return { text: 'I do not have enough source support to answer confidently.', sources: [], contextual: false };
-      return { text: answer, sources: cited.map(({ id, title, authorship, url }) => ({ id, title, authorship: authorship || 'Web search result', url })), contextual: true, model: completion.model || modelId || provider.model, provider: selectedProvider === 'openai' ? 'OpenAI BYOK' : 'Local model', answerMode: personal ? 'persona' : 'general' };
+      return { text: answer, sources: [...new Map(cited.map(({ id, title, authorship, url }) => [id, { id, title, authorship: authorship || 'Web search result', url }])).values()], contextual: true, model: completion.model || modelId || provider.model, provider: selectedProvider === 'openai' ? 'OpenAI BYOK' : 'Local model', answerMode: personal ? 'persona' : 'general' };
     },
   };
 }

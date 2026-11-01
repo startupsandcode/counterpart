@@ -228,3 +228,22 @@ test('a configured editor-note prefix excludes the rest of an HTML article', asy
     assert.doesNotMatch(prompt, /AI-assisted article body/);
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
+
+test('persona retrieval can use a relevant paragraph after the first 3000 characters', async () => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'counterpart-long-'));
+  try {
+    const early = 'Background context with no milestone advice. '.repeat(100);
+    const late = 'When a milestone slips, Mira suggests revisiting scope and the next checkpoint.';
+    await writeFile(path.join(temp, 'notes.md'), `${early}\n\n${late}`);
+    const scoped = { ...persona, sources: [{ id: 'S1', title: 'Long notes', path: 'notes.md' }] };
+    let prompt = '';
+    const provider = { model: 'sample', complete: async (value) => {
+      prompt = value;
+      return { text: JSON.stringify({ answer: 'Revisit scope and the next checkpoint.', sources: ['S1'], supportQuote: late }) };
+    } };
+    const service = createChatService({ personas: [scoped], knowledgeRoot: temp, provider });
+    const result = await service.answer({ personaId: 'mira', question: 'What does Mira suggest when a milestone slips?' });
+    assert.match(prompt, /When a milestone slips/);
+    assert.equal(result.contextual, true);
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});
