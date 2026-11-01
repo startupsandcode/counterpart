@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createWebSearch, createOfficialPageReader } from './search.mjs';
 
 const MAX_QUESTION = 5000;
-const PRIVATE = /\b(?:private (?:email|message|client|records?|data)|confidential|passwords?|api keys?|bank account|medical records?|secret credentials?)\b|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b|\b(?:sk-|ghp_|github_pat_|xox[baprs]-)[a-z0-9_-]{12,}\b/i;
+const PRIVATE = /\b(private (?:email|message|information|data|records?|client)|personal email|home address|phone number|my bank balance|bank account (?:number|details)|medical records?|medical\b|symptoms?|diagnos(?:is|es)|treatments?|prescriptions?|passwords?|api keys?|client (?:names?|records?|financials?|revenue|income|profit|financial (?:data|figures?))|confidential|secret credentials?)\b|\b\d{3}-\d{2}-\d{4}\b|\b(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-])\d{3}[\s.-]\d{4}\b|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b|\b(?:sk-ant|sk-|ghp_|github_pat_|xox[baprs]-)[a-z0-9_-]{12,}\b/i;
 const COMMITMENT = /\b(?:I am|I'm) (?:the )?(?:real )?[A-Z][a-z]+\b|\b(?:I|we)(?:'ll| will) (?:call|email|message|send|meet|hire|pay)\b/i;
 const DEFAULT_OFFICIAL_DOCS = { ollama: { domains: ['docs.ollama.com'], sectionId: 'system-requirements' } };
 
@@ -39,6 +39,14 @@ function terms(value) {
   return new Set(String(value).toLowerCase().match(/[a-z0-9]{3,}/g) || []);
 }
 
+function attributedClaimSupported(answer, quote, persona) {
+  const stop = new Set('about after before could does from have into just more that their them there these this with would'.split(' '));
+  const name = new Set(persona.name.toLowerCase().split(/\s+/));
+  const claimed = [...terms(answer)].filter((word) => !stop.has(word) && !name.has(word));
+  const support = terms(quote);
+  return claimed.filter((word) => support.has(word)).length >= 2;
+}
+
 function isPersonaQuestion(question, persona) {
   const firstName = persona.name.split(/\s+/)[0];
   return new RegExp(`\\b${firstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(question)
@@ -60,24 +68,31 @@ async function loadSource(root, source) {
   return { id: source.id, title: source.title, authorship: source.authorship || 'User supplied', snippet: text.slice(0, 3000) };
 }
 
-export function createChatService({ personas, knowledgeRoot, provider, webSearch = createWebSearch(), officialPage = createOfficialPageReader(), officialDocs = DEFAULT_OFFICIAL_DOCS }) {
+export function createChatService({ personas, knowledgeRoot, provider, cloudProvider, cloudByokAvailable = false, webSearch = createWebSearch(), officialPage = createOfficialPageReader(), officialDocs = DEFAULT_OFFICIAL_DOCS }) {
   if (!Array.isArray(personas) || !personas.length) throw new ChatError('Configure at least one persona.', 500);
   const byId = new Map(personas.map((persona) => [persona.id, persona]));
   const cache = new Map();
+  let inferenceActive = false;
   async function sourcesFor(persona) {
     if (!cache.has(persona.id)) cache.set(persona.id, Promise.all((persona.sources || []).map((source) => loadSource(knowledgeRoot, source))));
     return cache.get(persona.id);
   }
   return {
     personas: () => personas.map(({ id, name, identity, disclosure, domain }) => ({ id, name, identity, disclosure, domain })),
-    status: () => ({ provider: 'local-openai-compatible', model: provider.model, configured: Boolean(provider.model), webSearch: 'opt-in' }),
+    status: () => ({ provider: 'local-openai-compatible', model: provider.model, configured: Boolean(provider.model), webSearch: 'opt-in', cloudByokAvailable }),
     models: () => provider.models(),
-    async answer({ personaId, question, messages = [], modelId, searchWeb = false }, signal) {
+    async answer({ personaId, question, messages = [], modelId, searchWeb = false, provider: selectedProvider = 'local', apiKey, cloudConsent = false }, signal) {
       if (typeof question !== 'string' || !question.trim() || question.length > MAX_QUESTION) throw new ChatError('Question must be 1–5000 characters.');
       const persona = byId.get(personaId);
       if (!persona) throw new ChatError('Unknown persona.', 404);
       if (!Array.isArray(messages) || messages.length > 8 || messages.some((message) => message.personaId !== personaId || !['user', 'assistant'].includes(message.role) || typeof message.text !== 'string' || message.text.length > 2500)) throw new ChatError('Conversation history is invalid.');
       if (PRIVATE.test(question) || messages.some((message) => PRIVATE.test(message.text))) return { text: 'I cannot help with private information in this sample.', sources: [], contextual: false };
+      if (/\b(?:are you|who are you)\b/i.test(question) && (isPersonaQuestion(question, persona) || /\b(?:really|human|ai)\b/i.test(question))) return { text: persona.disclosure, sources: [], contextual: false };
+      if (/\b(?:will|can|could|would)\s+(?:you|[A-Z][a-z]+)\s+(?:call|email|message|send|meet|hire|pay)\b/i.test(question)) return { text: `I cannot make commitments for ${persona.name}.`, sources: [], contextual: false };
+      if (selectedProvider === 'openai') {
+        if (!cloudByokAvailable || !cloudProvider) throw new ChatError('Cloud BYOK is disabled.', 403);
+        if (cloudConsent !== true) throw new ChatError('Confirm per-answer cloud consent before using BYOK.');
+      } else if (selectedProvider !== 'local') throw new ChatError('Select a local model or explicit BYOK.');
       const personal = isPersonaQuestion(question, persona);
       const knowledge = personal ? await sourcesFor(persona) : [];
       const wanted = terms(question);
@@ -112,14 +127,22 @@ export function createChatService({ personas, knowledgeRoot, provider, webSearch
         history ? `Conversation context:\n${history}` : '',
         `Question:\n${question.trim()}`,
       ].filter(Boolean).join('\n\n');
-      const result = parseAnswer((await provider.complete(prompt, { modelId, signal })).text);
+      if (inferenceActive) throw new ChatError('Another answer is running. Try again when it finishes.', 429);
+      inferenceActive = true;
+      let completion;
+      try {
+        completion = selectedProvider === 'openai'
+          ? await cloudProvider.complete(prompt, { apiKey, modelId, signal })
+          : await provider.complete(prompt, { modelId, signal });
+      } finally { inferenceActive = false; }
+      const result = parseAnswer(completion.text);
       const answer = typeof result?.answer === 'string' ? result.answer.trim().slice(0, 1800) : '';
       const cited = evidence.filter((source) => result?.sources?.includes(source.id));
       const quote = typeof result?.supportQuote === 'string' ? result.supportQuote.trim() : '';
       const supported = answer && !COMMITMENT.test(answer) && (!evidence.length || (cited.length && supportedNumbers(answer, cited) && supportedRequirements(answer, cited)))
-        && (!personal || (quote.length >= 20 && cited.some((source) => source.snippet.includes(quote))));
+        && (!personal || (quote.length >= 20 && cited.some((source) => source.snippet.includes(quote)) && attributedClaimSupported(answer, quote, persona)));
       if (!supported) return { text: 'I do not have enough source support to answer confidently.', sources: [], contextual: false };
-      return { text: answer, sources: cited.map(({ id, title, authorship, url }) => ({ id, title, authorship: authorship || 'Web search result', url })), contextual: true, model: modelId || provider.model, answerMode: personal ? 'persona' : 'general' };
+      return { text: answer, sources: cited.map(({ id, title, authorship, url }) => ({ id, title, authorship: authorship || 'Web search result', url })), contextual: true, model: completion.model || modelId || provider.model, provider: selectedProvider === 'openai' ? 'OpenAI BYOK' : 'Local model', answerMode: personal ? 'persona' : 'general' };
     },
   };
 }

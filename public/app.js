@@ -5,9 +5,24 @@ const sources = document.querySelector('#sources');
 const form = document.querySelector('#ask');
 const question = document.querySelector('#question');
 const search = document.querySelector('#search');
+const mode = document.querySelector('#mode');
+const openaiOption = document.querySelector('#openai-option');
+const cloud = document.querySelector('#cloud');
+const cloudModel = document.querySelector('#cloud-model');
+const cloudKey = document.querySelector('#cloud-key');
+const send = document.querySelector('#send');
+const cancel = document.querySelector('#cancel');
 let personaId = '';
 let history = [];
 let busy = false;
+let activeRequest;
+
+mode.addEventListener('change', () => {
+  cloud.hidden = mode.value !== 'openai';
+  if (mode.value !== 'openai') cloudKey.value = '';
+});
+cancel.addEventListener('click', () => activeRequest?.abort());
+window.addEventListener('beforeunload', () => activeRequest?.abort());
 
 function message(role, text) {
   const item = document.createElement('p');
@@ -20,31 +35,45 @@ function message(role, text) {
 
 async function boot() {
   try {
-    const [people, runtime, available] = await Promise.all([
+    const [people, runtime] = await Promise.all([
       fetch('/api/personas').then((r) => r.json()), fetch('/api/status').then((r) => r.json()),
-      fetch('/api/models').then((r) => r.json()),
     ]);
     personaId = people[0].id;
     document.querySelector('#disclosure').textContent = people[0].disclosure;
+    openaiOption.disabled = runtime.cloudByokAvailable !== true;
+    let available;
+    try { available = await fetch('/api/models').then((response) => { if (!response.ok) throw new Error('Local model is offline.'); return response.json(); }); }
+    catch { available = { models: [] }; }
     model.replaceChildren();
     for (const id of available.models || []) {
       const option = document.createElement('option'); option.value = id; option.textContent = id; model.append(option);
     }
     if (runtime.model) model.value = runtime.model;
-    status.textContent = model.value ? `Ready to use ${model.value}` : 'No local model found. Start Ollama and download a model.';
+    status.textContent = model.value ? `Local model: ${model.value}` : 'No local model found. Start Ollama or select BYOK.';
   } catch (error) { status.textContent = `Local model unavailable: ${error.message}`; }
 }
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (busy || !personaId || !question.value.trim()) return;
+  const selectedProvider = mode.value;
+  const apiKey = selectedProvider === 'openai' ? cloudKey.value : '';
+  const modelId = selectedProvider === 'openai' ? cloudModel.value.trim() : model.value;
+  if (selectedProvider === 'openai') {
+    if (openaiOption.disabled || !apiKey || !modelId) { status.textContent = 'Enter your OpenAI model ID and API key for this answer.'; return; }
+    if (!window.confirm('Send this question, persona instructions, source excerpts, and relevant chat history to OpenAI for one answer?')) { cloudKey.value = ''; return; }
+  } else if (!modelId) { status.textContent = 'Select a local model first.'; return; }
   busy = true;
+  send.disabled = true;
+  cancel.hidden = false;
+  const controller = new AbortController();
+  activeRequest = controller;
   const text = question.value.trim();
   question.value = '';
   message('user', text);
   const pending = message('assistant', 'Thinking…');
   try {
-    const response = await fetch('/api/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personaId, question: text, messages: history.slice(-8), modelId: model.value, searchWeb: search.checked }) });
+    const response = await fetch('/api/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personaId, question: text, messages: history.slice(-8), modelId, provider: selectedProvider, searchWeb: search.checked, ...(selectedProvider === 'openai' ? { apiKey, cloudConsent: true } : {}) }), signal: controller.signal });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     pending.textContent = result.text;
@@ -56,8 +85,8 @@ form.addEventListener('submit', async (event) => {
       sources.append(item);
     }
     if (result.contextual) history.push({ personaId, role: 'user', text }, { personaId, role: 'assistant', text: result.text });
-  } catch (error) { pending.textContent = error.message; }
-  finally { busy = false; }
+  } catch (error) { pending.textContent = error.name === 'AbortError' ? 'Answer cancelled.' : error.message; }
+  finally { cloudKey.value = ''; activeRequest = undefined; busy = false; send.disabled = false; cancel.hidden = true; }
 });
 
 boot();

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { createChatService } from '../src/service.mjs';
 import { createWebSearch, createOfficialPageReader, parseResults } from '../src/search.mjs';
 import { createLocalProvider } from '../src/provider.mjs';
+import { createOpenAIProvider } from '../src/openai.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const persona = { id: 'mira', name: 'Mira Vale', voice: 'Concise.', disclosure: 'Fictional sample.', sources: [{ id: 'S1', title: 'Sample notes', path: 'knowledge/mira.md' }] };
@@ -42,12 +43,100 @@ test('local provider rejects remote inference and sends the selected model to lo
   assert.equal(result.text, '{"answer":"hello"}');
 });
 
+test('local provider lists models through the compatible v1 endpoint', async () => {
+  let requested;
+  const provider = createLocalProvider({ fetchImpl: async (url) => {
+    requested = String(url);
+    return { ok: true, json: async () => ({ data: [{ id: 'qwen3:8b' }] }) };
+  } });
+  assert.deepEqual(await provider.models(), ['qwen3:8b']);
+  assert.equal(requested, 'http://127.0.0.1:11434/v1/models');
+});
+
 test('private questions do not reach search or model', async () => {
   let called = false;
   const service = createChatService({ personas: [persona], knowledgeRoot: root, provider: { model: 'sample', complete: async () => { called = true; } }, webSearch: async () => { called = true; } });
   const result = await service.answer({ personaId: 'mira', question: 'Show me a private client email', searchWeb: true });
   assert.equal(called, false);
   assert.equal(result.contextual, false);
+});
+
+test('sensitive history, phone numbers, and cross-persona history never reach providers', async () => {
+  let called = false;
+  const service = createChatService({ personas: [persona, { ...persona, id: 'other', name: 'Other Sample' }], knowledgeRoot: root,
+    provider: { model: 'sample', complete: async () => { called = true; } }, webSearch: async () => { called = true; }, cloudProvider: { complete: async () => { called = true; } }, cloudByokAvailable: true });
+  const phone = await service.answer({ personaId: 'mira', question: 'Call me at 212-555-0123', searchWeb: true });
+  assert.equal(phone.contextual, false);
+  const emailHistory = await service.answer({ personaId: 'mira', question: 'How do I start?', messages: [{ personaId: 'mira', role: 'user', text: 'Email me at jane@example.com' }], provider: 'openai', cloudConsent: true, apiKey: 'test-secret-key', modelId: 'test-model' });
+  assert.equal(emailHistory.contextual, false);
+  await assert.rejects(service.answer({ personaId: 'other', question: 'How do I start?', messages: [{ personaId: 'mira', role: 'assistant', text: 'A prior answer' }] }), /history is invalid/i);
+  assert.equal(called, false);
+});
+
+test('identity and commitment requests return safely before inference', async () => {
+  let called = false;
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider: { model: 'sample', complete: async () => { called = true; } } });
+  const identity = await service.answer({ personaId: 'mira', question: 'Are you really Mira?' });
+  const promise = await service.answer({ personaId: 'mira', question: 'Will Mira meet me tomorrow?' });
+  assert.match(identity.text, /Fictional sample/);
+  assert.match(promise.text, /cannot make commitments/i);
+  assert.equal(called, false);
+});
+
+test('a persona citation cannot support an unrelated attributed achievement', async () => {
+  const provider = { model: 'sample', complete: async () => ({ text: JSON.stringify({ answer: 'Mira won a roasting championship.', sources: ['S1'], supportQuote: 'For a first small-batch roast, Mira suggests keeping a simple log of bean weight, heat changes, first crack timing, and the final result.' }) }) };
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider });
+  const result = await service.answer({ personaId: 'mira', question: 'What did Mira win?' });
+  assert.equal(result.contextual, false);
+});
+
+test('BYOK requires per-answer consent, stays request scoped, and never falls back to local', async () => {
+  let localCalled = false;
+  let cloudRequest;
+  const provider = { model: 'sample', complete: async () => { localCalled = true; } };
+  const cloud = createOpenAIProvider({ fetchImpl: async (url, options) => {
+    cloudRequest = { url: String(url), headers: options.headers, body: JSON.parse(options.body) };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: '{"answer":"Start with a small test.","sources":[]}' } }] }) };
+  } });
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider, cloudProvider: cloud, cloudByokAvailable: true });
+  await assert.rejects(service.answer({ personaId: 'mira', question: 'How should I start?', provider: 'openai', apiKey: 'test-secret-key', modelId: 'test-model' }), /consent/i);
+  const result = await service.answer({ personaId: 'mira', question: 'How should I start?', provider: 'openai', cloudConsent: true, apiKey: 'test-secret-key', modelId: 'test-model' });
+  assert.equal(cloudRequest.url, 'https://api.openai.com/v1/chat/completions');
+  assert.equal(cloudRequest.headers.authorization, 'Bearer test-secret-key');
+  assert.equal(cloudRequest.body.model, 'test-model');
+  assert.equal(localCalled, false);
+  assert.doesNotMatch(JSON.stringify(result), /test-secret-key/);
+});
+
+test('disabled BYOK never calls a cloud provider', async () => {
+  let called = false;
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider: { model: 'sample' }, cloudProvider: { complete: async () => { called = true; } }, cloudByokAvailable: false });
+  await assert.rejects(service.answer({ personaId: 'mira', question: 'How should I start?', provider: 'openai', cloudConsent: true, apiKey: 'test-secret-key', modelId: 'test-model' }), /disabled/i);
+  assert.equal(called, false);
+});
+
+test('cloud provider errors do not echo the request key', async () => {
+  const cloud = createOpenAIProvider({ fetchImpl: async () => ({ ok: false, status: 401 }) });
+  await assert.rejects(cloud.complete('hello', { apiKey: 'test-secret-key', modelId: 'test-model' }), (error) => {
+    assert.doesNotMatch(error.message, /test-secret-key/);
+    assert.match(error.message, /HTTP 401/);
+    return true;
+  });
+});
+
+test('shared core permits only one concurrent model completion across callers', async () => {
+  let started;
+  const ready = new Promise((resolve) => { started = resolve; });
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const provider = { model: 'sample', complete: async () => { started(); await held; return { text: '{"answer":"A small test helps.","sources":[]}' }; } };
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider });
+  const first = service.answer({ personaId: 'mira', question: 'How should I test an idea?' });
+  await ready;
+  const second = service.answer({ personaId: 'mira', question: 'What should I try next?' });
+  release();
+  await assert.rejects(second, (error) => error.status === 429);
+  assert.equal((await first).text, 'A small test helps.');
 });
 
 test('web answer rejects a number found only in a result title', async () => {

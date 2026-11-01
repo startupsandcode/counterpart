@@ -10,10 +10,10 @@ function loopbackEndpoint(value) {
 export function createLocalProvider({ endpoint = 'http://127.0.0.1:11434/v1/chat/completions', model = '', fetchImpl = fetch, timeoutMs = 90_000 } = {}) {
   const url = loopbackEndpoint(endpoint);
   async function models() {
-    const response = await fetchImpl(new URL('/api/tags', url), { signal: AbortSignal.timeout(5_000) });
+    const response = await fetchImpl(new URL('/v1/models', url), { signal: AbortSignal.timeout(5_000) });
     if (!response.ok) throw new Error(`Local model list returned HTTP ${response.status}.`);
     const data = await response.json();
-    return (data.models || []).map((item) => item.name).filter((name) => typeof name === 'string');
+    return (data.data || []).map((item) => item.id).filter((id) => typeof id === 'string');
   }
   async function complete(prompt, { modelId = model, signal } = {}) {
     if (!modelId) throw new Error('Select a local model first.');

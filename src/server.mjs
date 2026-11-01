@@ -3,13 +3,15 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLocalProvider } from './provider.mjs';
+import { createOpenAIProvider } from './openai.mjs';
 import { createChatService, ChatError } from './service.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'] };
 const MAX_BODY = 100_000;
 
-export function createHandler(service, publicRoot = path.join(ROOT, 'public')) {
+export function createHandler(service, publicRoot = path.join(ROOT, 'public'), { answerTimeoutMs = 100_000 } = {}) {
+  let answerActive = false;
   return async (req, res) => {
     const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
     try {
@@ -34,9 +36,12 @@ export function createHandler(service, publicRoot = path.join(ROOT, 'public')) {
         let data;
         try { data = JSON.parse(body); } catch { return send(400, { error: 'Invalid JSON.' }); }
         if (!data || typeof data !== 'object' || Array.isArray(data)) return send(400, { error: 'JSON object required.' });
+        if (answerActive) return send(429, { error: 'Another answer is running. Try again when it finishes.' });
+        answerActive = true;
         const controller = new AbortController();
         res.on('close', () => { if (!res.writableEnded) controller.abort(); });
-        return send(200, await service.answer(data, controller.signal));
+        try { return send(200, await service.answer(data, AbortSignal.any([controller.signal, AbortSignal.timeout(answerTimeoutMs)]))); }
+        finally { answerActive = false; }
       }
       return send(404, { error: 'Not found.' });
     } catch (error) {
@@ -48,7 +53,8 @@ export function createHandler(service, publicRoot = path.join(ROOT, 'public')) {
 export async function createApp({ root = ROOT, env = process.env } = {}) {
   const config = JSON.parse(await readFile(path.join(root, 'personas/mira.json'), 'utf8'));
   const provider = createLocalProvider({ endpoint: env.COUNTERPART_LOCAL_API_URL || undefined, model: env.COUNTERPART_MODEL || '' });
-  return createChatService({ personas: [config], knowledgeRoot: root, provider });
+  const cloudByokAvailable = !env.VERCEL && env.COUNTERPART_ALLOW_CLOUD_BYOK !== 'false';
+  return createChatService({ personas: [config], knowledgeRoot: root, provider, cloudProvider: cloudByokAvailable ? createOpenAIProvider() : undefined, cloudByokAvailable });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
