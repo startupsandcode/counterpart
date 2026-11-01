@@ -1,15 +1,15 @@
-# Counterpart Kit (local draft)
+# Counterpart
 
-A small, local-first chat app for building an AI counterpart from an explicit persona and a short allowlist of knowledge files. This draft includes only Mira Vale, a fictional coffee-roasting sample. It does not contain anyone's private corpus, credentials, or chat logs.
+A local-first prototype for building an AI counterpart from an explicit persona and a short allowlist of knowledge files. It includes only Mira Vale, a fictional coffee-roasting sample. It does not include a real person's corpus, credentials, or chat logs.
 
 ## Quick start
 
-1. Install Node.js 22.13 or newer and [Ollama](https://ollama.com/). Start Ollama on your computer.
+1. Clone this repository. Install Node.js 22.13 or newer and [Ollama](https://ollama.com/). Start Ollama on your computer.
 2. Choose and download a model that fits your computer, for example `ollama pull qwen3:8b`. Downloads are user-initiated; this project does not pull a model automatically.
-3. In this directory, run `COUNTERPART_MODEL=qwen3:8b npm start` (macOS/Linux) or set `COUNTERPART_MODEL` in PowerShell and run `npm start` (Windows).
+3. In this directory, run `COUNTERPART_MODEL=qwen3:8b npm start` (macOS/Linux) or set `$env:COUNTERPART_MODEL = 'qwen3:8b'` in PowerShell and run `npm start` (Windows).
 4. Open `http://127.0.0.1:4750/`.
 
-No `npm install` is needed: the app uses Node's built-in modules. Run `npm test` for its local tests. The model endpoint defaults to Ollama's `http://127.0.0.1:11434/v1/chat/completions`. Set `COUNTERPART_LOCAL_API_URL` to another **HTTP loopback** compatible endpoint if needed. The app binds its own server to `127.0.0.1` only.
+No `npm install` is needed: the app uses Node's built-in modules. Run `npm test` for its local tests. The model endpoint defaults to Ollama's `http://127.0.0.1:11434/v1/chat/completions`. Set `COUNTERPART_LOCAL_API_URL` to another **HTTP loopback** compatible endpoint if needed. The app binds its own server to `127.0.0.1` only. Ollama and its model are separate downloads; the repository does not bundle either one.
 
 ## Configure a persona
 
@@ -23,4 +23,6 @@ Web research is **off by default**. When checked, only the current question goes
 
 The answer checks require a cited result, reject numbers absent from cited excerpts, and reject numeric requirements drawn only from setup advice. They do not prove that every sentence follows from its sources. Review answers and linked pages before relying on them; source-supported answer quality is still being evaluated.
 
-This is a local review draft with no license selected yet. Do not publish it until you choose a license and review the export contents.
+## Prototype status
+
+This is an early prototype, licensed under [MIT](LICENSE). The deterministic tests cover routing, privacy boundaries, source selection, consent, and cancellation. They do not measure answer quality. General web research relies on short search snippets and links; it does not verify arbitrary linked pages or prove that every answer follows from its sources. One configured Ollama documentation section can be fetched and checked as an example, but this is not a general page-reading pipeline. Search can fail if the third-party HTML changes or blocks requests. No live OpenAI BYOK call has been validated; cloud use requires your own key and may cost money. Review generated answers and open source links before relying on them.
