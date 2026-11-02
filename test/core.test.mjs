@@ -108,6 +108,46 @@ test('BYOK requires per-answer consent, stays request scoped, and never falls ba
   assert.doesNotMatch(JSON.stringify(result), /test-secret-key/);
 });
 
+test('cloud request uses a current Chat Completions token limit without model-specific sampling options', async () => {
+  let request;
+  const cloud = createOpenAIProvider({ fetchImpl: async (_url, options) => {
+    request = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ model: 'test-model', choices: [{ finish_reason: 'stop', message: { content: '{"answer":"Ready."}' } }] }) };
+  } });
+  await cloud.complete('Public sample prompt', { apiKey: 'test-secret-key', modelId: 'test-model' });
+  assert.equal(request.max_completion_tokens, 4096);
+  assert.equal(request.store, false);
+  assert.equal('max_tokens' in request, false);
+  assert.equal('temperature' in request, false);
+});
+
+test('cloud completion reports a truncated answer instead of treating it as complete', async () => {
+  const cloud = createOpenAIProvider({ fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ finish_reason: 'length', message: { content: '{"answer":"Part' } }] }) }) });
+  await assert.rejects(cloud.complete('Public sample prompt', { apiKey: 'test-secret-key', modelId: 'test-model' }), /token limit/i);
+});
+
+test('cloud key validation rejects whitespace and cancelled response reads do not expose it', async () => {
+  let calls = 0;
+  const controller = new AbortController();
+  let reading;
+  const ready = new Promise((resolve) => { reading = resolve; });
+  const cloud = createOpenAIProvider({ fetchImpl: async (_url, options) => {
+    calls++;
+    if (options.headers.authorization.includes('test secret key')) return { ok: true, json: async () => ({ choices: [{ message: { content: '{"answer":"unexpected"}' } }] }) };
+    return { ok: true, json: async () => new Promise((_resolve, reject) => {
+      reading();
+      options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }) };
+  } });
+  await assert.rejects(cloud.complete('Public sample prompt', { apiKey: 'test secret key', modelId: 'test-model' }), /valid API key/i);
+  assert.equal(calls, 0);
+  const pending = cloud.complete('Public sample prompt', { apiKey: 'test-secret-key', modelId: 'test-model', signal: controller.signal });
+  await ready;
+  controller.abort();
+  await assert.rejects(pending, (error) => error.message === 'The answer was cancelled.' && !error.message.includes('test-secret-key'));
+  assert.equal(calls, 1);
+});
+
 test('disabled BYOK never calls a cloud provider', async () => {
   let called = false;
   const service = createChatService({ personas: [persona], knowledgeRoot: root, provider: { model: 'sample' }, cloudProvider: { complete: async () => { called = true; } }, cloudByokAvailable: false });
@@ -204,6 +244,32 @@ test('general knowledge remains available without web search', async () => {
   const result = await service.answer({ personaId: 'mira', question: 'How should I run a small experiment?' });
   assert.equal(result.text, 'Keep the first experiment small.');
   assert.equal(result.contextual, true);
+});
+
+test('a valid long question remains usable as conversation history', async () => {
+  const provider = { model: 'sample', complete: async () => ({ text: JSON.stringify({ answer: 'Try one small test.', sources: [] }) }) };
+  const service = createChatService({ personas: [persona], knowledgeRoot: root, provider });
+  const question = `How should I test this? ${'A'.repeat(2900)}`;
+  const first = await service.answer({ personaId: 'mira', question });
+  const second = await service.answer({ personaId: 'mira', question: 'What next?', messages: [
+    { personaId: 'mira', role: 'user', text: question },
+    { personaId: 'mira', role: 'assistant', text: first.text },
+  ] });
+  assert.equal(second.text, 'Try one small test.');
+});
+
+test('a cited two-day note cannot support a two-hour persona claim', async () => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'counterpart-number-'));
+  try {
+    const quote = 'Mira says the roast took 2 days because the test equipment failed and needed repair.';
+    await writeFile(path.join(temp, 'note.md'), quote);
+    const scoped = { ...persona, sources: [{ id: 'S1', title: 'Roast note', path: 'note.md' }] };
+    const provider = { model: 'sample', complete: async () => ({ text: JSON.stringify({ answer: 'Mira says the roast took 2 hours because the test equipment failed and needed repair.', sources: ['S1'], supportQuote: quote }) }) };
+    const service = createChatService({ personas: [scoped], knowledgeRoot: temp, provider });
+    const result = await service.answer({ personaId: 'mira', question: 'What does Mira say about the roast and test equipment?' });
+    assert.equal(result.contextual, false);
+    assert.deepEqual(result.sources, []);
+  } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
 test('fictional persona answer cites only its configured knowledge', async () => {

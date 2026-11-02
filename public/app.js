@@ -12,6 +12,7 @@ const cloudModel = document.querySelector('#cloud-model');
 const cloudKey = document.querySelector('#cloud-key');
 const send = document.querySelector('#send');
 const cancel = document.querySelector('#cancel');
+const newChat = document.querySelector('#new-chat');
 let personaId = '';
 let history = [];
 let busy = false;
@@ -20,9 +21,19 @@ let activeRequest;
 mode.addEventListener('change', () => {
   cloud.hidden = mode.value !== 'openai';
   if (mode.value !== 'openai') cloudKey.value = '';
+  if (busy) activeRequest?.abort();
 });
-cancel.addEventListener('click', () => activeRequest?.abort());
-window.addEventListener('beforeunload', () => activeRequest?.abort());
+cancel.addEventListener('click', () => { cloudKey.value = ''; activeRequest?.abort(); });
+newChat.addEventListener('click', () => {
+  cloudKey.value = '';
+  activeRequest?.abort();
+  history = [];
+  question.value = '';
+  messages.replaceChildren();
+  message('intro', 'Ask a general question or ask about Mira\'s sample roasting notes.');
+  sources.replaceChildren();
+});
+window.addEventListener('beforeunload', () => { cloudKey.value = ''; activeRequest?.abort(); });
 
 function message(role, text) {
   const item = document.createElement('p');
@@ -68,6 +79,7 @@ form.addEventListener('submit', async (event) => {
   cancel.hidden = false;
   const controller = new AbortController();
   activeRequest = controller;
+  cloudKey.value = '';
   const text = question.value.trim();
   question.value = '';
   message('user', text);
@@ -75,12 +87,14 @@ form.addEventListener('submit', async (event) => {
   try {
     const response = await fetch('/api/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personaId, question: text, messages: history.slice(-8), modelId, provider: selectedProvider, searchWeb: search.checked, ...(selectedProvider === 'openai' ? { apiKey, cloudConsent: true } : {}) }), signal: controller.signal });
     const result = await response.json();
+    if (controller.signal.aborted) return;
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     pending.textContent = result.text;
     sources.replaceChildren();
     if (!result.sources?.length) { const empty = document.createElement('p'); empty.textContent = 'No cited source.'; sources.append(empty); }
     for (const source of result.sources || []) {
-      const item = document.createElement('p'); item.textContent = `${source.id}: ${source.title} (${source.authorship}) `;
+      const item = document.createElement('p');
+      item.textContent = `${source.id}: ${source.title}${source.authorship ? ` (${source.authorship})` : ''} `;
       if (source.url && /^https?:\/\//.test(source.url)) { const link = document.createElement('a'); link.href = source.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open source'; item.append(link); }
       sources.append(item);
     }
