@@ -12,7 +12,7 @@ class Element {
   scrollIntoView() {}
 }
 
-async function loadUi(answer) {
+async function loadUi(answer, { confirm = () => true } = {}) {
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   const code = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const ids = ['model', 'model-status', 'messages', 'sources', 'ask', 'question', 'search', 'mode', 'openai-option', 'cloud', 'cloud-model', 'cloud-key', 'send', 'cancel', 'new-chat', 'disclosure'];
@@ -27,7 +27,7 @@ async function loadUi(answer) {
     requests.push({ body: JSON.parse(options.body), keyInForm: elements.get('cloud-key').value, signal: options.signal });
     return answer(url, options);
   };
-  runInNewContext(code, { document, window: { confirm: () => true, addEventListener() {} }, fetch, AbortController });
+  runInNewContext(code, { document, window: { confirm, addEventListener() {} }, fetch, AbortController });
   await new Promise((resolve) => setImmediate(resolve));
   return { html, elements, requests };
 }
@@ -35,6 +35,7 @@ async function loadUi(answer) {
 test('BYOK clears its key before sending and new chat removes prior conversation context', async () => {
   const ui = await loadUi(async () => ({ ok: true, json: async () => ({ text: 'Try one small roast.', sources: [], contextual: true }) }));
   assert.match(ui.html, /id="new-chat"/);
+  assert.match(ui.html, /Local mode uses your local model server; optional OpenAI mode sends the disclosed request to OpenAI/);
   const get = (id) => ui.elements.get(id);
   get('mode').value = 'openai';
   get('mode').dispatch('change');
@@ -49,6 +50,12 @@ test('BYOK clears its key before sending and new chat removes prior conversation
   get('question').value = 'What next?';
   await get('ask').dispatch('submit');
   assert.equal(ui.requests[1].body.messages.length, 2);
+  get('cloud-key').value = 'unsent-test-key';
+  get('mode').value = 'local';
+  get('mode').dispatch('change');
+  assert.equal(get('cloud-key').value, '');
+  get('mode').value = 'openai';
+  get('mode').dispatch('change');
   get('cloud-key').value = 'unsent-test-key';
   get('new-chat').dispatch('click');
   assert.equal(get('cloud-key').value, '');
@@ -75,4 +82,18 @@ test('cancelling an in-flight cloud answer clears the key and does not save that
   await pending;
   assert.equal(get('messages').children.at(-1).textContent, 'Answer cancelled.');
   assert.equal(get('send').disabled, false);
+});
+
+test('declining cloud consent clears the key and makes no answer request', async () => {
+  const ui = await loadUi(async () => { throw new Error('answer request must not run'); }, { confirm: () => false });
+  const get = (id) => ui.elements.get(id);
+  get('mode').value = 'openai';
+  get('mode').dispatch('change');
+  get('cloud-model').value = 'test-model';
+  get('cloud-key').value = 'test-secret-key';
+  get('question').value = 'A public question';
+  await get('ask').dispatch('submit');
+  assert.equal(ui.requests.length, 0);
+  assert.equal(get('cloud-key').value, '');
+  assert.equal(get('question').value, 'A public question');
 });
