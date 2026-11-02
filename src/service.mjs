@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createWebSearch, createOfficialPageReader } from './search.mjs';
 
 const MAX_QUESTION = 5000;
+const MAX_HISTORY_TEXT = MAX_QUESTION;
 const PRIVATE = /\b(private (?:email|message|information|data|records?|client)|personal email|home address|phone number|my bank balance|bank account (?:number|details)|medical records?|medical\b|symptoms?|diagnos(?:is|es)|treatments?|prescriptions?|passwords?|api keys?|client (?:names?|records?|financials?|revenue|income|profit|financial (?:data|figures?))|confidential|secret credentials?)\b|\b\d{3}-\d{2}-\d{4}\b|\b(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-])\d{3}[\s.-]\d{4}\b|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b|\b(?:sk-ant|sk-|ghp_|github_pat_|xox[baprs]-)[a-z0-9_-]{12,}\b/i;
 const COMMITMENT = /\b(?:I am|I'm) (?:the )?(?:real )?[A-Z][a-z]+\b|\b(?:I|we)(?:'ll| will) (?:call|email|message|send|meet|hire|pay)\b/i;
 const DEFAULT_OFFICIAL_DOCS = { ollama: { domains: ['docs.ollama.com'], sectionId: 'system-requirements' } };
@@ -12,8 +13,13 @@ export class ChatError extends Error {
 }
 
 function numbers(value) {
-  return (String(value).match(/\bv?\d+(?:\.\d+)?\s*(?:gb|mb|tb|%|percent)?\b/gi) || [])
-    .map((item) => item.toLowerCase().replace(/^v/, '').replace(/\s+/g, ''));
+  const words = new Map([['one', '1'], ['two', '2'], ['three', '3'], ['four', '4'], ['five', '5'], ['six', '6'], ['seven', '7'], ['eight', '8'], ['nine', '9'], ['ten', '10'], ['half', '0.5']]);
+  const pattern = /\bv?(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|half)\s*(%|percent|days?|weeks?|months?|years?|hours?|minutes?|seconds?|users?|customers?|dollars?|times?|gb|mb|tb)?(?![a-z0-9])/gi;
+  return [...String(value).matchAll(pattern)].map((match) => {
+    const raw = match[1].toLowerCase();
+    const unit = match[2]?.toLowerCase().replace(/s$/, '') || '';
+    return `${words.get(raw) || String(Number(raw))}:${unit === '%' ? 'percent' : unit}`;
+  });
 }
 
 function supportedNumbers(answer, sources) {
@@ -90,7 +96,7 @@ export function createChatService({ personas, knowledgeRoot, provider, cloudProv
       if (typeof question !== 'string' || !question.trim() || question.length > MAX_QUESTION) throw new ChatError('Question must be 1–5000 characters.');
       const persona = byId.get(personaId);
       if (!persona) throw new ChatError('Unknown persona.', 404);
-      if (!Array.isArray(messages) || messages.length > 8 || messages.some((message) => message.personaId !== personaId || !['user', 'assistant'].includes(message.role) || typeof message.text !== 'string' || message.text.length > 2500)) throw new ChatError('Conversation history is invalid.');
+      if (!Array.isArray(messages) || messages.length > 8 || messages.some((message) => message.personaId !== personaId || !['user', 'assistant'].includes(message.role) || typeof message.text !== 'string' || message.text.length > MAX_HISTORY_TEXT)) throw new ChatError('Conversation history is invalid.');
       if (PRIVATE.test(question) || messages.some((message) => PRIVATE.test(message.text))) return { text: 'I cannot help with private information in this sample.', sources: [], contextual: false };
       if (/\b(?:are you|who are you)\b/i.test(question) && (isPersonaQuestion(question, persona) || /\b(?:really|human|ai)\b/i.test(question))) return { text: persona.disclosure, sources: [], contextual: false };
       if (/\b(?:will|can|could|would)\s+(?:you|[A-Z][a-z]+)\s+(?:call|email|message|send|meet|hire|pay)\b/i.test(question)) return { text: `I cannot make commitments for ${persona.name}.`, sources: [], contextual: false };
