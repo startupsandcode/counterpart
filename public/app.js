@@ -18,6 +18,13 @@ let history = [];
 let busy = false;
 let activeRequest;
 
+question.addEventListener('keydown', (event) => {
+  if (event.ctrlKey && event.key === 'Enter') {
+    event.preventDefault();
+    if (!busy) form.requestSubmit(send);
+  }
+});
+
 mode.addEventListener('change', () => {
   cloud.hidden = mode.value !== 'openai';
   if (mode.value !== 'openai') cloudKey.value = '';
@@ -98,7 +105,7 @@ form.addEventListener('submit', async (event) => {
       if (source.url && /^https?:\/\//.test(source.url)) { const link = document.createElement('a'); link.href = source.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open source'; item.append(link); }
       sources.append(item);
     }
-    if (result.contextual) history.push({ personaId, role: 'user', text }, { personaId, role: 'assistant', text: result.text });
+    history.push({ personaId, role: 'user', text }, { personaId, role: 'assistant', text: result.text });
   } catch (error) { pending.textContent = error.name === 'AbortError' ? 'Answer cancelled.' : error.message; }
   finally { cloudKey.value = ''; activeRequest = undefined; busy = false; send.disabled = false; cancel.hidden = true; }
 });

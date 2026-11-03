@@ -6,6 +6,7 @@ h1 { font-size: clamp(2rem, 6vw, 3.5rem); line-height: 1.1; margin: .35rem 0; }
 h2 { font-size: 1rem; }
 .eyebrow { font-size: .75rem; letter-spacing: .13em; font-weight: 700; color: #4b6c5e; }
 header p, footer, .disclosure { color: #52635c; }
+.header-actions { display: flex; justify-content: flex-end; margin-top: .75rem; }
 .status, .cloud, .chat, form, .sources { background: #fff; border: 1px solid #d9e0d8; border-radius: 12px; padding: 1.1rem 1.25rem; margin: 1rem 0; }
 .status { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
 .status strong { margin-right: auto; }
@@ -20,7 +21,11 @@ select, button { font: inherit; padding: .45rem .7rem; }
 .check { font-weight: 400; }
 .disclosure { font-size: .85rem; }
 button { color: #fff; background: #1b5b47; border: 0; border-radius: 8px; padding: .65rem 1.3rem; cursor: pointer; }
-#cancel { background: #57645f; margin-left: .5rem; }
+.secondary { color: #29483d; background: transparent; border: 1px solid #9daea5; }
+.form-actions { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
+.shortcut-hint { color: #65736d; font-size: .85rem; }
+kbd { display: inline-block; border: 1px solid #c8d1ca; border-radius: 4px; padding: 0 .3rem; background: #f5f7f4; color: #35463e; font: inherit; font-size: .8rem; }
+#cancel { background: #57645f; }
 [hidden] { display: none !important; }
 a { color: #145943; }
 footer { font-size: .85rem; margin-top: 1.5rem; }
