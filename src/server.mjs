@@ -26,6 +26,18 @@ export function createHandler(service, publicRoot = path.join(ROOT, 'public'), {
       if (req.method === 'GET' && url.pathname === '/api/status') return send(200, service.status());
       if (req.method === 'GET' && url.pathname === '/api/personas') return send(200, service.personas());
       if (req.method === 'GET' && url.pathname === '/api/models') return send(200, { models: await service.models() });
+      if (req.method === 'POST' && url.pathname === '/api/openai-models') {
+        if (!String(req.headers['content-type'] || '').startsWith('application/json')) return send(415, { error: 'JSON required.' });
+        let body = '';
+        for await (const chunk of req) {
+          body += chunk;
+          if (body.length > MAX_BODY) return send(413, { error: 'Request too large.' });
+        }
+        let data;
+        try { data = JSON.parse(body); } catch { return send(400, { error: 'Invalid JSON.' }); }
+        if (!service.status().cloudByokAvailable) return send(403, { error: 'OpenAI mode is unavailable.' });
+        return send(200, { models: await service.openAIModels(data?.apiKey) });
+      }
       if (req.method === 'POST' && url.pathname === '/api/answer') {
         if (!String(req.headers['content-type'] || '').startsWith('application/json')) return send(415, { error: 'JSON required.' });
         let body = '';

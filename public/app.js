@@ -8,8 +8,11 @@ const search = document.querySelector('#search');
 const mode = document.querySelector('#mode');
 const openaiOption = document.querySelector('#openai-option');
 const cloud = document.querySelector('#cloud');
+const localModelField = document.querySelector('#local-model-field');
 const cloudModel = document.querySelector('#cloud-model');
 const cloudKey = document.querySelector('#cloud-key');
+const loadCloudModels = document.querySelector('#load-cloud-models');
+const cloudModelStatus = document.querySelector('#cloud-model-status');
 const send = document.querySelector('#send');
 const cancel = document.querySelector('#cancel');
 const newChat = document.querySelector('#new-chat');
@@ -26,9 +29,46 @@ question.addEventListener('keydown', (event) => {
 });
 
 mode.addEventListener('change', () => {
-  cloud.hidden = mode.value !== 'openai';
-  if (mode.value !== 'openai') cloudKey.value = '';
+  const cloudMode = mode.value === 'openai';
+  cloud.hidden = !cloudMode;
+  localModelField.hidden = cloudMode;
+  status.hidden = cloudMode;
+  if (mode.value !== 'openai') {
+    cloudKey.value = '';
+    cloudModel.replaceChildren(new Option('Load models using your API key', ''));
+    cloudModel.disabled = true;
+    cloudModelStatus.textContent = 'Model choices are fetched using your key and cleared when you leave Cloud mode.';
+  }
   if (busy) activeRequest?.abort();
+});
+loadCloudModels.addEventListener('click', async () => {
+  const apiKey = cloudKey.value;
+  if (!apiKey) { cloudModelStatus.textContent = 'Enter your OpenAI API key first.'; return; }
+  loadCloudModels.disabled = true;
+  cloudModelStatus.textContent = 'Loading models…';
+  try {
+    const response = await fetch('/api/openai-models', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ apiKey }) });
+    const result = await response.json();
+    if (!response.ok) {
+      if (response.status === 404) throw new Error('Model loading is not enabled in the running server. Restart Counterpart, then try again.');
+      throw new Error(result.error || `HTTP ${response.status}`);
+    }
+    cloudModel.replaceChildren();
+    for (const id of result.models || []) cloudModel.append(new Option(id, id));
+    cloudModel.disabled = !result.models?.length;
+    if (result.models?.length) {
+      const preferred = result.models.find((id) => id === 'chat-latest') || result.models.find((id) => /^gpt-(6|5)/i.test(id)) || result.models[0];
+      cloudModel.value = preferred;
+      cloudModelStatus.textContent = `${result.models.length} models available to this API key.`;
+    } else {
+      cloudModel.append(new Option('No compatible chat models found', ''));
+      cloudModelStatus.textContent = 'No compatible chat models were returned for this API key.';
+    }
+  } catch (error) {
+    cloudModel.replaceChildren(new Option('Could not load models', ''));
+    cloudModel.disabled = true;
+    cloudModelStatus.textContent = error.message;
+  } finally { loadCloudModels.disabled = false; }
 });
 cancel.addEventListener('click', () => { cloudKey.value = ''; activeRequest?.abort(); });
 newChat.addEventListener('click', () => {

@@ -8,8 +8,14 @@ h2 { font-size: 1rem; }
 header p, footer, .disclosure { color: #52635c; }
 .header-actions { display: flex; justify-content: flex-end; margin-top: .75rem; }
 .status, .cloud, .chat, form, .sources { background: #fff; border: 1px solid #d9e0d8; border-radius: 12px; padding: 1.1rem 1.25rem; margin: 1rem 0; }
-.status { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
-.status strong { margin-right: auto; }
+.status { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(190px, 1.1fr) minmax(180px, 1.4fr) minmax(150px, 1fr); gap: .85rem 1rem; align-items: end; }
+.status-title { align-self: center; }
+.status-field { display: grid; gap: .35rem; min-width: 0; }
+.status-field select { width: 100%; min-width: 0; }
+#model-status { margin: 0; align-self: center; color: #52635c; overflow-wrap: anywhere; }
+.cloud-model-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: end; }
+.cloud-model-row > div { min-width: 0; }
+.cloud-model-row select { width: 100%; }
 .chat { min-height: 190px; max-height: 400px; overflow: auto; }
 .chat p { padding: .7rem 1rem; border-radius: 10px; max-width: 88%; }
 .chat .user { background: #dceee5; margin-left: auto; }
@@ -29,3 +35,15 @@ kbd { display: inline-block; border: 1px solid #c8d1ca; border-radius: 4px; padd
 [hidden] { display: none !important; }
 a { color: #145943; }
 footer { font-size: .85rem; margin-top: 1.5rem; }
+@media (max-width: 700px) {
+  .status { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .status-title { grid-column: 1 / -1; }
+  #model-status { grid-column: 1 / -1; grid-row: 3; }
+  .model-field { grid-column: 1 / -1; }
+}
+@media (max-width: 420px) {
+  .status { grid-template-columns: 1fr; }
+  .status-title, #model-status, .model-field { grid-column: 1; }
+  #model-status { grid-row: auto; }
+  .cloud-model-row { grid-template-columns: 1fr; }
+}

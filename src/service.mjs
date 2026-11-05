@@ -92,6 +92,10 @@ export function createChatService({ personas, knowledgeRoot, provider, cloudProv
     personas: () => personas.map(({ id, name, identity, disclosure, domain }) => ({ id, name, identity, disclosure, domain })),
     status: () => ({ provider: 'local-openai-compatible', model: provider.model, configured: Boolean(provider.model), webSearch: 'opt-in', cloudByokAvailable }),
     models: () => provider.models(),
+    openAIModels: (apiKey) => {
+      if (!cloudByokAvailable || !cloudProvider?.models) throw new ChatError('Cloud BYOK is disabled.', 403);
+      return cloudProvider.models(apiKey);
+    },
     async answer({ personaId, question, messages = [], modelId, searchWeb = false, provider: selectedProvider = 'local', apiKey, cloudConsent = false }, signal) {
       if (typeof question !== 'string' || !question.trim() || question.length > MAX_QUESTION) throw new ChatError('Question must be 1–5000 characters.');
       const persona = byId.get(personaId);

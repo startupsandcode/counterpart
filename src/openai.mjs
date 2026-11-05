@@ -1,5 +1,18 @@
 export function createOpenAIProvider({ fetchImpl = fetch, timeoutMs = 90_000 } = {}) {
   return {
+    async models(apiKey) {
+      if (typeof apiKey !== 'string' || apiKey.length < 8 || apiKey.length > 512 || /\s/.test(apiKey)) throw new Error('Enter a valid API key to load available models.');
+      const response = await fetchImpl('https://api.openai.com/v1/models', {
+        headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10_000),
+      });
+      let data;
+      try { data = await response.json(); } catch { throw new Error('OpenAI returned an unreadable model list.'); }
+      if (!response.ok) {
+        const detail = data?.error?.message;
+        throw new Error(`OpenAI could not list models (HTTP ${response.status})${detail ? `: ${detail}` : '. Check that this is an OpenAI API key with API access.'}`);
+      }
+      return (data.data || []).map((item) => item.id).filter((id) => typeof id === 'string' && /^(gpt-|chat-latest)/i.test(id)).sort();
+    },
     async complete(prompt, { apiKey, modelId, signal } = {}) {
       if (typeof apiKey !== 'string' || apiKey.length < 8 || apiKey.length > 512 || /\s/.test(apiKey)) throw new Error('Enter a valid API key for this answer.');
       if (typeof modelId !== 'string' || !/^[\w][\w.:/-]{0,99}$/.test(modelId)) throw new Error('Enter a valid OpenAI model ID.');
